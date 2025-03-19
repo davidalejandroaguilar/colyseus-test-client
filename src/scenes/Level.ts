@@ -38,6 +38,9 @@ export default class Level extends Phaser.Scene {
     down: false,
   };
   cursorKeys: Phaser.Types.Input.Keyboard.CursorKeys;
+  currentPlayer: Phaser.Types.Physics.Arcade.ImageWithDynamicBody;
+  localRef: Phaser.GameObjects.Rectangle;
+  remoteRef: Phaser.GameObjects.Rectangle;
 
   preload() {
     this.cursorKeys = this.input.keyboard!.createCursorKeys();
@@ -58,13 +61,39 @@ export default class Level extends Phaser.Scene {
         // keep a reference of it on `playerEntities`
         this.playerEntities[sessionId] = entity;
 
-        $(player).onChange(() => {
-          // entity.x = player.x;
-          // entity.y = player.y;
+        if (sessionId === this.room.sessionId) {
+          // this is the current player!
+          // (we are going to treat it differently during the update loop)
+          this.currentPlayer = entity;
 
-          entity.setData("serverX", player.x);
-          entity.setData("serverY", player.y);
-        });
+          // localRef is being used for debug only
+          this.localRef = this.add.rectangle(0, 0, entity.width, entity.height);
+          this.localRef.setStrokeStyle(1, 0x00ff00);
+
+          // remoteRef is being used for debug only
+          this.remoteRef = this.add.rectangle(
+            0,
+            0,
+            entity.width,
+            entity.height
+          );
+          this.remoteRef.setStrokeStyle(1, 0xff0000);
+
+          $(player).onChange(() => {
+            this.remoteRef.x = player.x;
+            this.remoteRef.y = player.y;
+          });
+        } else {
+          // all remote players are here!
+          // (same as before, we are going to interpolate remote players)
+          $(player).onChange(() => {
+            // entity.x = player.x;
+            // entity.y = player.y;
+
+            entity.setData("serverX", player.x);
+            entity.setData("serverY", player.y);
+          });
+        }
       });
 
       $(this.room.state).players.onRemove((_player, sessionId: string) => {
@@ -86,6 +115,11 @@ export default class Level extends Phaser.Scene {
       return;
     }
 
+    // skip loop if not connected yet.
+    if (!this.currentPlayer) {
+      return;
+    }
+
     // send input to the server
     this.inputPayload.left = this.cursorKeys.left.isDown;
     this.inputPayload.right = this.cursorKeys.right.isDown;
@@ -93,8 +127,39 @@ export default class Level extends Phaser.Scene {
     this.inputPayload.down = this.cursorKeys.down.isDown;
     this.room.send(0, this.inputPayload);
 
+    this.localRef.x = this.currentPlayer.x;
+    this.localRef.y = this.currentPlayer.y;
+
+    // Moving the local player instantly
+    //
+    // We need to implement in the client-side the same logic we already have
+    // on the server-side for player movement.
+    //
+    // Instead of waiting for the acknowledgement of the server, we apply the
+    // position change locally at exactly the same instant as sending the input
+    // to the server:
+    const velocity = 2;
+
+    if (this.inputPayload.left) {
+      this.currentPlayer.x -= velocity;
+    } else if (this.inputPayload.right) {
+      this.currentPlayer.x += velocity;
+    }
+
+    if (this.inputPayload.up) {
+      this.currentPlayer.y -= velocity;
+    } else if (this.inputPayload.down) {
+      this.currentPlayer.y += velocity;
+    }
+
     // interpolate all player entities
     for (let sessionId in this.playerEntities) {
+      // do not interpolate the current player
+      if (sessionId === this.room.sessionId) {
+        continue;
+      }
+
+      // interpolate all other player entities
       const entity = this.playerEntities[sessionId];
       const { serverX, serverY } = entity.data.values;
 
