@@ -59,8 +59,11 @@ export default class Level extends Phaser.Scene {
         this.playerEntities[sessionId] = entity;
 
         $(player).onChange(() => {
-          entity.x = player.x;
-          entity.y = player.y;
+          // entity.x = player.x;
+          // entity.y = player.y;
+
+          entity.setData("serverX", player.x);
+          entity.setData("serverY", player.y);
         });
       });
 
@@ -89,6 +92,18 @@ export default class Level extends Phaser.Scene {
     this.inputPayload.up = this.cursorKeys.up.isDown;
     this.inputPayload.down = this.cursorKeys.down.isDown;
     this.room.send(0, this.inputPayload);
+
+    // interpolate all player entities
+    for (let sessionId in this.playerEntities) {
+      const entity = this.playerEntities[sessionId];
+      const { serverX, serverY } = entity.data.values;
+
+      // The third argument of Phaser.Math.Linear is the percentage value. You
+      // may want to adjust it for your own needs. It accepts from 0 to 1. The
+      // higher it is, the faster the interpolation is going to happen.
+      entity.x = Phaser.Math.Linear(entity.x, serverX, 0.1);
+      entity.y = Phaser.Math.Linear(entity.y, serverY, 0.1);
+    }
   }
 
   /* END-USER-CODE */
