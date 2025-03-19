@@ -28,6 +28,13 @@ window.addEventListener("load", function () {
       autoCenter: Phaser.Scale.Center.CENTER_BOTH,
     },
     scene: [Boot, Preload, Level],
+    physics: {
+      default: "arcade",
+      arcade: {
+        gravity: { x: 0, y: 0 },
+        debug: true,
+      },
+    },
   });
 
   game.scene.start("Boot");

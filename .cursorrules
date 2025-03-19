@@ -1,0 +1,5 @@
+This is a Phaser game with Colyseus for multiplayer:
+
+"@phaserjs/editor-scripts-base": "^1.0.0",
+"colyseus.js": "^0.16.11",
+"phaser": "3.80.1"
