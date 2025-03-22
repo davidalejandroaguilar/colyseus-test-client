@@ -41,6 +41,8 @@ export default class Level extends Phaser.Scene {
   currentPlayer: Phaser.Types.Physics.Arcade.ImageWithDynamicBody;
   localRef: Phaser.GameObjects.Rectangle;
   remoteRef: Phaser.GameObjects.Rectangle;
+  elapsedTime: number = 0;
+  fixedTimeStep: number = 1000 / 60;
 
   preload() {
     this.cursorKeys = this.input.keyboard!.createCursorKeys();
@@ -109,7 +111,7 @@ export default class Level extends Phaser.Scene {
     }
   }
 
-  update(_time: number, _delta: number) {
+  update(time: number, delta: number) {
     // skip loop if not connected with room yet.
     if (!this.room) {
       return;
@@ -120,6 +122,14 @@ export default class Level extends Phaser.Scene {
       return;
     }
 
+    this.elapsedTime += delta;
+    while (this.elapsedTime >= this.fixedTimeStep) {
+      this.elapsedTime -= this.fixedTimeStep;
+      this.fixedTick(time, this.fixedTimeStep);
+    }
+  }
+
+  fixedTick(_time: number, _delta: number) {
     // send input to the server
     this.inputPayload.left = this.cursorKeys.left.isDown;
     this.inputPayload.right = this.cursorKeys.right.isDown;
