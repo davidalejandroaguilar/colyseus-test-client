@@ -46,6 +46,29 @@ export default class Level extends Phaser.Scene {
   elapsedTime: number = 0;
   fixedTimeStep: number = 1000 / 60;
   currentTick: number = 0;
+  // Track inputs and positions for reconciliation
+  inputHistory: {
+    input: {
+      left: boolean;
+      right: boolean;
+      up: boolean;
+      down: boolean;
+      tick: number;
+    };
+    position: {
+      x: number;
+      y: number;
+    };
+  }[] = [];
+  // Maximum history size to prevent memory leaks
+  MAX_HISTORY_SIZE: number = 100;
+  // Reconciliation threshold in pixels
+  RECONCILIATION_THRESHOLD: number = 5;
+  // Whether reconciliation is in progress
+  isReconciling: boolean = false;
+  // Debug text for reconciliation status
+  debugText: Phaser.GameObjects.Text;
+  velocity: number = 2;
 
   preload() {
     this.cursorKeys = this.input.keyboard!.createCursorKeys();
@@ -57,6 +80,12 @@ export default class Level extends Phaser.Scene {
     try {
       this.room = await this.client.joinOrCreate("my_room");
       console.log("Joined successfully!");
+
+      // Add debug text
+      this.debugText = this.add.text(10, 10, "Reconciliation: Idle", {
+        color: "#ffffff",
+        fontSize: "16px",
+      });
 
       const $ = getStateCallbacks(this.room);
 
@@ -87,6 +116,9 @@ export default class Level extends Phaser.Scene {
           $(player).onChange(() => {
             this.remoteRef.x = player.x;
             this.remoteRef.y = player.y;
+
+            // Check for position discrepancy and reconcile if needed
+            this.checkReconciliation(player);
           });
         } else {
           // all remote players are here!
@@ -132,6 +164,136 @@ export default class Level extends Phaser.Scene {
     }
   }
 
+  /**
+   * Checks if the client's position has diverged from the server's authoritative position.
+   * If the difference is significant, performs reconciliation by resetting to server position
+   * and replaying unprocessed inputs. If the difference is small, applies a subtle correction.
+   *
+   * @param playerServerState - The server's authoritative player state
+   */
+  checkReconciliation(playerServerState: any) {
+    // Only check if not already reconciling
+    if (this.isReconciling) return;
+
+    // Calculate the Euclidean distance between client's position and server's position
+    // This measures how far our local player has drifted from where the server thinks we are
+    const distance = Phaser.Math.Distance.Between(
+      this.currentPlayer.x, // Client's current x position
+      this.currentPlayer.y, // Client's current y position
+      playerServerState.x, // Server's authoritative x position
+      playerServerState.y // Server's authoritative y position
+    );
+
+    // If distance exceeds threshold, perform full reconciliation
+    if (distance > this.RECONCILIATION_THRESHOLD) {
+      this.debugText.setText(
+        `Reconciliation: Active (${distance.toFixed(2)}px difference)`
+      );
+      this.isReconciling = true;
+
+      // Find the input that corresponds to the server's last processed tick
+      // This is important because:
+      // 1. The server's position is based on inputs it has processed up to a certain tick
+      // 2. We need to know which inputs have already been processed by the server
+      // 3. Any inputs sent after this tick need to be replayed after reconciliation
+      const serverTick = playerServerState.tick;
+      const matchingHistoryIndex = this.inputHistory.findIndex(
+        (item) => item.input.tick === serverTick
+      );
+
+      if (matchingHistoryIndex !== -1) {
+        // Reset player position to match server's authoritative position
+        this.currentPlayer.x = playerServerState.x;
+        this.currentPlayer.y = playerServerState.y;
+
+        // Remove all entries up to and including the match
+        // (we don't need inputs the server has already processed)
+        this.inputHistory = this.inputHistory.slice(matchingHistoryIndex + 1);
+
+        // Replay all inputs that the server hasn't processed yet
+        // This ensures we don't lose responsive movement while waiting for server update
+        this.replayInputs();
+      } else {
+        // If no matching tick found (rare case), just snap to server position
+        // This can happen if there was a disconnect or if we have limited history
+        this.currentPlayer.x = playerServerState.x;
+        this.currentPlayer.y = playerServerState.y;
+        this.inputHistory = [];
+      }
+
+      this.isReconciling = false;
+
+      // Reset debug text after 2 seconds
+      this.time.delayedCall(2000, () => {
+        this.debugText.setText("Reconciliation: Idle");
+      });
+    } else if (distance > 0) {
+      // Apply soft correction when below threshold but not exactly matching
+      // This prevents gradual drift while keeping movements smooth
+
+      // Calculate correction strength based on how close we are to the threshold
+      // - Small discrepancies get tiny corrections
+      // - Larger discrepancies (approaching threshold) get stronger corrections
+      // - We cap at 0.1 (10%) to ensure movements always feel smooth
+      const correctionStrength = Math.min(
+        0.1,
+        distance / (this.RECONCILIATION_THRESHOLD * 2)
+      );
+
+      // Linear interpolation moves us a percentage of the way (correctionStrength)
+      // toward the server position. This is imperceptible to the player but
+      // prevents small errors from accumulating over time.
+      this.currentPlayer.x = Phaser.Math.Linear(
+        this.currentPlayer.x, // Current client position
+        playerServerState.x, // Target server position
+        correctionStrength // How much to move toward target (0.0 to 0.1)
+      );
+      this.currentPlayer.y = Phaser.Math.Linear(
+        this.currentPlayer.y,
+        playerServerState.y,
+        correctionStrength
+      );
+
+      // Update debug text occasionally when soft correction is happening
+      // We don't update every frame to avoid text flickering
+      if (Math.random() < 0.05) {
+        // Only update ~5% of the time
+        this.debugText.setText(`Soft Correction: ${distance.toFixed(2)}px`);
+
+        // Reset after a short delay
+        this.time.delayedCall(500, () => {
+          this.debugText.setText("Reconciliation: Idle");
+        });
+      }
+    }
+    // If distance is exactly 0, no correction is needed - client and server agree perfectly
+  }
+
+  /**
+   * Replays all inputs in the history that haven't been processed by the server yet.
+   * This is called after reconciliation to ensure player movement remains responsive
+   * even while waiting for server confirmation.
+   */
+  replayInputs() {
+    // Apply each stored input in sequence to rebuild the client position
+    for (const entry of this.inputHistory) {
+      const input = entry.input;
+
+      // Apply the same movement logic used in fixedTick
+      if (input.left) {
+        this.currentPlayer.x -= this.velocity;
+      } else if (input.right) {
+        this.currentPlayer.x += this.velocity;
+      }
+
+      if (input.up) {
+        this.currentPlayer.y -= this.velocity;
+      } else if (input.down) {
+        this.currentPlayer.y += this.velocity;
+      }
+    }
+  }
+
   fixedTick(_time: number, _delta: number) {
     this.currentTick++;
 
@@ -140,6 +302,13 @@ export default class Level extends Phaser.Scene {
     );
     const ticksBehind = this.currentTick - currentPlayerRemote.tick;
     console.log({ ticksBehind });
+
+    // Record player position before input
+    // We store this to enable rolling back to previous positions during reconciliation
+    const previousPosition = {
+      x: this.currentPlayer.x,
+      y: this.currentPlayer.y,
+    };
 
     // send input to the server
     this.inputPayload.left = this.cursorKeys.left.isDown;
@@ -160,18 +329,31 @@ export default class Level extends Phaser.Scene {
     // Instead of waiting for the acknowledgement of the server, we apply the
     // position change locally at exactly the same instant as sending the input
     // to the server:
-    const velocity = 2;
 
     if (this.inputPayload.left) {
-      this.currentPlayer.x -= velocity;
+      this.currentPlayer.x -= this.velocity;
     } else if (this.inputPayload.right) {
-      this.currentPlayer.x += velocity;
+      this.currentPlayer.x += this.velocity;
     }
 
     if (this.inputPayload.up) {
-      this.currentPlayer.y -= velocity;
+      this.currentPlayer.y -= this.velocity;
     } else if (this.inputPayload.down) {
-      this.currentPlayer.y += velocity;
+      this.currentPlayer.y += this.velocity;
+    }
+
+    // Store input and position in history if not reconciling
+    // This history allows us to replay inputs after reconciliation
+    if (!this.isReconciling) {
+      this.inputHistory.push({
+        input: { ...this.inputPayload },
+        position: previousPosition,
+      });
+
+      // Limit history size to prevent memory leaks
+      if (this.inputHistory.length > this.MAX_HISTORY_SIZE) {
+        this.inputHistory.shift();
+      }
     }
 
     // interpolate all player entities
