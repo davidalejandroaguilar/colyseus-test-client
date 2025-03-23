@@ -31,11 +31,13 @@ export default class Level extends Phaser.Scene {
     right: boolean;
     up: boolean;
     down: boolean;
+    tick: number;
   } = {
     left: false,
     right: false,
     up: false,
     down: false,
+    tick: 0,
   };
   cursorKeys: Phaser.Types.Input.Keyboard.CursorKeys;
   currentPlayer: Phaser.Types.Physics.Arcade.ImageWithDynamicBody;
@@ -43,6 +45,7 @@ export default class Level extends Phaser.Scene {
   remoteRef: Phaser.GameObjects.Rectangle;
   elapsedTime: number = 0;
   fixedTimeStep: number = 1000 / 60;
+  currentTick: number = 0;
 
   preload() {
     this.cursorKeys = this.input.keyboard!.createCursorKeys();
@@ -130,11 +133,20 @@ export default class Level extends Phaser.Scene {
   }
 
   fixedTick(_time: number, _delta: number) {
+    this.currentTick++;
+
+    const currentPlayerRemote = this.room.state.players.get(
+      this.room.sessionId
+    );
+    const ticksBehind = this.currentTick - currentPlayerRemote.tick;
+    console.log({ ticksBehind });
+
     // send input to the server
     this.inputPayload.left = this.cursorKeys.left.isDown;
     this.inputPayload.right = this.cursorKeys.right.isDown;
     this.inputPayload.up = this.cursorKeys.up.isDown;
     this.inputPayload.down = this.cursorKeys.down.isDown;
+    this.inputPayload.tick = this.currentTick;
     this.room.send(0, this.inputPayload);
 
     this.localRef.x = this.currentPlayer.x;
