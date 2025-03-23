@@ -147,7 +147,7 @@ export default class Level extends Phaser.Scene {
     this.inputPayload.up = this.cursorKeys.up.isDown;
     this.inputPayload.down = this.cursorKeys.down.isDown;
     this.inputPayload.tick = this.currentTick;
-    this.room.send(0, this.inputPayload);
+    this.room.send("move", this.inputPayload);
 
     this.localRef.x = this.currentPlayer.x;
     this.localRef.y = this.currentPlayer.y;
